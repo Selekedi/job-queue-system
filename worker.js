@@ -4,6 +4,8 @@ const Redis = require('ioredis');
 const redis = new Redis();
 
 const JOB_QUEUE = 'job-queue';
+const FAILED_JOBS_QUEUE = 'failed-jobs';
+
 const RETRY_DELAY = 5000;
 
 async function processJob(job) {
@@ -22,21 +24,33 @@ async function processJob(job) {
 }
 
 async function handleRetry(job) {
-  job.attempts = (job.attempts || 1);
-  job.retries = (job.retries || 3);
+  job.attempts = job.attempts || 1;
+  job.retries = job.retries || 3;
+  job.meta.updatedAt = Date.now();
+  job.errors = job.errors || [];
+
+  job.errors.push({
+    message: `Attempt ${job.attempts} failed: ${job.lastError || 'Unknown error'}`,
+    at: Date.now()
+  });
 
   if (job.attempts >= job.retries) {
+    job.meta.status = 'failed';
+    job.meta.failedAt = Date.now();
     console.log(`⛔ Final failure for job ${job.id}, no more retries.`);
+    await redis.rpush(FAILED_JOBS_QUEUE, JSON.stringify(job));
     return;
   }
 
   job.attempts += 1;
+  job.status = 'retrying';
   console.log(`🔁 Retrying job ${job.id} in ${RETRY_DELAY / 1000}s (Attempt ${job.attempts}/${job.retries})`);
 
   await delay(RETRY_DELAY);
   await redis.rpush(JOB_QUEUE, JSON.stringify(job));
   console.log(`📤 Job ${job.id} re-queued for retry`);
 }
+
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));

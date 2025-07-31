@@ -25,4 +25,4 @@ async function sendMultipleJobs(count = 10, delay = 200) {
   }
 }
 
-sendMultipleJobs(1);
+sendMultipleJobs(10);
