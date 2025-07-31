@@ -1,0 +1,3 @@
+curl -X POST http://localhost:3000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"type": "email", "to": "user2@example.com", "subject": "Welcome!"}'
