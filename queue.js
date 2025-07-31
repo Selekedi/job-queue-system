@@ -1,17 +1,26 @@
 const Redis = require('ioredis');
+const { v4: uuidv4} = require("uuid")
 const redis = new Redis(process.env.REDIS_URL);
 
 let jobCounter = 0;
 
 async function addJob(type, data) {
+  const id = uuidv4()
   const job = {
-    id: ++jobCounter,
+    id,
     type,
     data,
-    createdAt: Date.now(),
+    retries:3,
+    attempts:0,
+    meta:{
+      status:"waiting",
+      addedAt: Date.now(),
+      updatedAt: Date.now()
+    }
   };
 
-  await redis.lpush('job-queue', JSON.stringify(job));
+  await redis.rpush('job-queue', JSON.stringify(job));
+
   return job.id;
 }
 
