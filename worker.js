@@ -8,9 +8,22 @@ const FAILED_JOBS_QUEUE = 'failed-jobs';
 
 const RETRY_DELAY = 5000;
 
+const jobPriority = {
+  "send-email":20,
+  "get-report":40,
+  "generate-pdf":50,
+  "reindex-search":60,
+  "clear-cache":100
+}
+
+
+function getPriority(jobType){
+  return jobPriority[jobType] ?? 200
+}
+
 async function processJob(job) {
   try {
-    console.log(`🔧 Processing job: ${job.id}`);
+    console.log(`🔧 Processing job: ${job.id} of type ${job.type}`);
     
     // Simulate job failure
     if (Math.random() < 0.5) throw new Error("💥 Simulated failure");
@@ -37,6 +50,8 @@ async function handleRetry(job) {
   job.attempts = job.attempts || 1;
   job.retries = job.retries || 3;
   job.updatedAt = Date.now();
+
+  const priority = getPriority(job.type)
   
   
 
@@ -58,11 +73,14 @@ async function handleRetry(job) {
   console.log(`🔁 Retrying job ${job.id} in ${RETRY_DELAY / 1000}s (Attempt ${job.attempts}/${job.retries})`);
 
   await delay(RETRY_DELAY);
-  await redis.rpush(JOB_QUEUE, JSON.stringify(job));
   job.history.push({
     event:"requeued",
     timestamp: Date.now().toLocaleString()
   })
+  await redis.hset(`job:${job.id}`, 'data', JSON.stringify(job));
+
+  await redis.zadd('job-queue-priority', priority, job.id);
+  
   console.log(`📤 Job ${job.id} re-queued for retry`);
 }
 
@@ -71,20 +89,36 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+const popJobLua = `
+  local vals = redis.call('ZRANGE', KEYS[1], 0, 0)
+  if #vals == 0 then
+    return nil
+  end
+  redis.call('ZREM', KEYS[1], vals[1])
+  return vals[1]
+`
+
+async function popHighestPriorityJob() {
+  const jobId = await redis.eval(popJobLua, 1, 'job-queue-priority');
+  if (!jobId) return null;
+
+  const jobStr = await redis.hget(`job:${jobId}`, "data");
+  if (!jobStr) return null;
+
+  const job = JSON.parse(jobStr);
+  return job;
+}
+
+
 async function workerLoop() {
   console.log("👷 Worker started, waiting for jobs...");
 
   while (true) {
     try {
-      const res = await redis.blpop(JOB_QUEUE, 0);
-      const [_key, value] = res;
-
-      let job;
-      try {
-        job = JSON.parse(value);
-      } catch (e) {
-        console.warn("⚠️ Could not parse job:", value);
-        continue;
+      const job = await popHighestPriorityJob()
+      if(!job){
+        await delay(1000)
+        continue
       }
 
       await processJob(job);
