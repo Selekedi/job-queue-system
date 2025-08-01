@@ -15,10 +15,20 @@ async function processJob(job) {
     // Simulate job failure
     if (Math.random() < 0.5) throw new Error("💥 Simulated failure");
 
+    job.history.push({
+      event:"processing",
+      timestamp: Date.now().toLocaleString(),
+      attempt:job.attempts + 1
+    })
+
     console.log(`✅ Job complete: ${job.id}`);
     
   } catch (err) {
     console.error(`❌ Job failed: ${job.id}`, err.message);
+    job.history.push({
+      event:"failed",
+      timestamp: Date.now().toLocaleString()
+    })
     await handleRetry(job);
   }
 }
@@ -26,19 +36,20 @@ async function processJob(job) {
 async function handleRetry(job) {
   job.attempts = job.attempts || 1;
   job.retries = job.retries || 3;
-  job.meta.updatedAt = Date.now();
-  job.errors = job.errors || [];
-
-  job.errors.push({
-    message: `Attempt ${job.attempts} failed: ${job.lastError || 'Unknown error'}`,
-    at: Date.now()
-  });
+  job.updatedAt = Date.now();
+  
+  
 
   if (job.attempts >= job.retries) {
-    job.meta.status = 'failed';
-    job.meta.failedAt = Date.now();
+    job.status = 'failed';
     console.log(`⛔ Final failure for job ${job.id}, no more retries.`);
+
     await redis.rpush(FAILED_JOBS_QUEUE, JSON.stringify(job));
+    job.lastFailure = {
+      "timestamp": Date.now().toLocaleString(),
+      "error": "RequestTimeoutError",
+      "message": "External service did not respond in time"
+    }
     return;
   }
 
@@ -48,6 +59,10 @@ async function handleRetry(job) {
 
   await delay(RETRY_DELAY);
   await redis.rpush(JOB_QUEUE, JSON.stringify(job));
+  job.history.push({
+    event:"requeued",
+    timestamp: Date.now().toLocaleString()
+  })
   console.log(`📤 Job ${job.id} re-queued for retry`);
 }
 
