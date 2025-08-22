@@ -21,28 +21,67 @@ function getPriority(jobType){
   return jobPriority[jobType] ?? 200
 }
 
+const claimJobLua = `
+  local topN = redis.call("ZRANGE",KEYS[1],0,ARGV[1]-1)
+  local now = tonumber(ARGV[2])
+  local leaseDuration = tonumber(ARGV[3])
+
+  for i,jobId in ipairs(topN) do
+    local jobData = redis.call("HGET",'job:'..jobId,'data')
+    if jobData then
+      local job = cjson.decode(jobData)
+      if job.status == 'waiting' or (not job.leaseUntil) or job.leaseUntil < now then
+        job.status = "processing"
+        job.leaseUntil = now + leaseDuration
+        redis.call("HSET","job:"..jobId, 'data', cjson.encode(job))
+        return jobId
+      end
+    end
+  end
+  return nil
+`
+
 async function processJob(job) {
   try {
+
     console.log(`🔧 Processing job: ${job.id} of type ${job.type}`);
-    
+    job.attempts = (job.attempts || 0) + 1
+    job.history.push({
+      event:"processing",
+      timestamp: new Date().toLocaleString(),
+      attempt:job.attempts
+    })
     // Simulate job failure
     if (Math.random() < 0.5) throw new Error("💥 Simulated failure");
 
     job.history.push({
-      event:"processing",
-      timestamp: Date.now().toLocaleString(),
-      attempt:job.attempts + 1
+      event:"completed",
+      timestamp: new Date().toLocaleString(),
     })
+
+    job.status = "completed"
+
+    await redis.hset(`job:${job.id}`,"data",JSON.stringify(job))
+    await redis.zrem("job-queue-priority",job.id)
+
+
 
     console.log(`✅ Job complete: ${job.id}`);
     
   } catch (err) {
     console.error(`❌ Job failed: ${job.id}`, err.message);
     job.history.push({
-      event:"failed",
-      timestamp: Date.now().toLocaleString()
-    })
-    await handleRetry(job);
+      event: "failed",
+      timestamp: new Date().toLocaleString(),
+      error: err.message
+    });
+    if((job.attempts || 0) >= job.retries){
+      job.status = "failed";
+      await redis.hset(`job:${job.id}`, "data", JSON.stringify(job));
+      await redis.zrem("job-queue-priority", job.id);
+    }else {
+      await redis.hset(`job:${job.id}`, "data", JSON.stringify(job));
+    }
   }
 }
 
@@ -61,7 +100,7 @@ async function handleRetry(job) {
 
     await redis.rpush(FAILED_JOBS_QUEUE, JSON.stringify(job));
     job.lastFailure = {
-      "timestamp": Date.now().toLocaleString(),
+      timestamp: Date.toLocaleString(),
       "error": "RequestTimeoutError",
       "message": "External service did not respond in time"
     }
@@ -99,7 +138,7 @@ const popJobLua = `
 `
 
 async function popHighestPriorityJob() {
-  const jobId = await redis.eval(popJobLua, 1, 'job-queue-priority');
+  const jobId = await redis.eval(claimJobLua, 1, 'job-queue-priority',10,Date.now(),5000);
   if (!jobId) return null;
 
   const jobStr = await redis.hget(`job:${jobId}`, "data");

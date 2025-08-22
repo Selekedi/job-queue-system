@@ -45,8 +45,9 @@ async function addJob(type, data) {
     status:"waiting",
     addedAt: Date.now(),
     updatedAt: Date.now(),
+    leaseUntil:0,
     history:[{
-      event:"created", timestamp: Date.now().toLocaleString()
+      event:"created", timestamp:new Date().toLocaleString()
     }]
   };
 
