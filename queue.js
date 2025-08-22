@@ -18,7 +18,7 @@ function getPriority(jobType){
 const enqueueLua = `
   local jobKey = KEYS[1]
   local queueKey = KEYS[2]
-  local jobData = ARG[1]
+  local jobData = ARGV[1]
   local priority = tonumber(ARGV[2])
   local jobId = ARGV[3]
 

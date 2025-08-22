@@ -38,4 +38,3 @@ async function sendMultipleJobs(count = 10, delay = 200) {
 }
 
 sendMultipleJobs(10);
-console.log(getRandomJobType())
