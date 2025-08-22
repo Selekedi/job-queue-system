@@ -15,6 +15,23 @@ function getPriority(jobType){
 }
 
 
+const enqueueLua = `
+  local jobKey = KEYS[1]
+  local queueKey = KEYS[2]
+  local jobData = ARG[1]
+  local priority = tonumber(ARGV[2])
+  local jobId = ARGV[3]
+
+  -- store the job data
+  redis.call("HSET",jobKey,"data",jobData)
+
+  -- Add the job to the priority queue
+  redis.call("ZADD",queueKey,priority,jobId)
+
+  return jobId
+`
+
+
 async function addJob(type, data) {
 
   const id = uuidv4()
@@ -33,11 +50,19 @@ async function addJob(type, data) {
     }]
   };
 
-  await redis.hset(`job:${job.id}`, 'data', JSON.stringify(job));
+  await redis.eval(
+    enqueueLua,
+    2,
+    `job:${id}`,
+    "job-queue-priority",
+    JSON.stringify(job),
+    priority,
+    id
+  )
 
-  await redis.zadd('job-queue-priority', priority, job.id);
+  
 
-  return job.id;
+  return id;
 }
 
 module.exports = { addJob };
